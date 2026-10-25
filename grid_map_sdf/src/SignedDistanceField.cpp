@@ -8,6 +8,8 @@
 
 #include <limits>
 #include <algorithm>
+#include <cmath>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -61,6 +63,8 @@ void SignedDistanceField::calculateSignedDistanceField(
   Matrix sdfElevationAbove = Matrix::Ones(map.rows(), map.cols()) * maxDistance_;
   Matrix sdfLayer = Matrix::Zero(map.rows(), map.cols());
   std::vector<Matrix> sdf;
+
+  minHeight -= 0.2;
   zIndexStartHeight_ = minHeight;
 
   // Calculate signed distance field from bottom.
@@ -96,7 +100,8 @@ grid_map::Matrix SignedDistanceField::getPlanarSignedDistanceField(
   Eigen::Dynamic,
   Eigen::Dynamic> & data) const
 {
-  image<uchar> * input = new image<uchar>(data.rows(), data.cols(), true);
+  image<uchar> inputImage(data.rows(), data.cols(), true);
+  auto * input = &inputImage;
 
   for (int y = 0; y < input->height(); y++) {
     for (int x = 0; x < input->width(); x++) {
@@ -105,14 +110,14 @@ grid_map::Matrix SignedDistanceField::getPlanarSignedDistanceField(
   }
 
   // Compute dt.
-  image<float> * out = dt(input);
+  std::unique_ptr<image<float>> out(dt(input));
 
   Matrix result(data.rows(), data.cols());
 
   // Take square roots.
   for (int y = 0; y < out->height(); y++) {
     for (int x = 0; x < out->width(); x++) {
-      result(x, y) = sqrt(imRef(out, x, y));
+      result(x, y) = std::sqrt(imRef(out.get(), x, y));
     }
   }
   return result;
@@ -122,8 +127,9 @@ double SignedDistanceField::getDistanceAt(const Position3 & position) const
 {
   double xCenter = size_.x() / 2.0;
   double yCenter = size_.y() / 2.0;
-  int i = std::round(xCenter - (position.x() - position_.x()) / resolution_);
-  int j = std::round(yCenter - (position.y() - position_.y()) / resolution_);
+  // Cell i spans [i, i + 1) in index coordinates, so floor gives the cell containing the position.
+  int i = std::floor(xCenter - (position.x() - position_.x()) / resolution_);
+  int j = std::floor(yCenter - (position.y() - position_.y()) / resolution_);
   int k = std::round((position.z() - zIndexStartHeight_) / resolution_);
   i = std::max(i, 0);
   i = std::min(i, size_.x() - 1);
@@ -138,8 +144,8 @@ double SignedDistanceField::getInterpolatedDistanceAt(const Position3 & position
 {
   double xCenter = size_.x() / 2.0;
   double yCenter = size_.y() / 2.0;
-  int i = std::round(xCenter - (position.x() - position_.x()) / resolution_);
-  int j = std::round(yCenter - (position.y() - position_.y()) / resolution_);
+  int i = std::floor(xCenter - (position.x() - position_.x()) / resolution_);
+  int j = std::floor(yCenter - (position.y() - position_.y()) / resolution_);
   int k = std::round((position.z() - zIndexStartHeight_) / resolution_);
   i = std::max(i, 0);
   i = std::min(i, size_.x() - 1);
@@ -148,8 +154,9 @@ double SignedDistanceField::getInterpolatedDistanceAt(const Position3 & position
   k = std::max(k, 0);
   k = std::min(k, static_cast<int>(data_.size()) - 1);
   Vector3 gradient = getDistanceGradientAt(position);
-  double xp = position_.x() + ((size_.x() - i) - xCenter) * resolution_;
-  double yp = position_.y() + ((size_.y() - j) - yCenter) * resolution_;
+  // Center of the cell
+  double xp = position_.x() + (xCenter - i - 0.5) * resolution_;
+  double yp = position_.y() + (yCenter - j - 0.5) * resolution_;
   double zp = zIndexStartHeight_ + k * resolution_;
   Vector3 error = position - Vector3(xp, yp, zp);
   return data_[k](i, j) + gradient.dot(error);
@@ -159,8 +166,8 @@ Vector3 SignedDistanceField::getDistanceGradientAt(const Position3 & position) c
 {
   double xCenter = size_.x() / 2.0;
   double yCenter = size_.y() / 2.0;
-  int i = std::round(xCenter - (position.x() - position_.x()) / resolution_);
-  int j = std::round(yCenter - (position.y() - position_.y()) / resolution_);
+  int i = std::floor(xCenter - (position.x() - position_.x()) / resolution_);
+  int j = std::floor(yCenter - (position.y() - position_.y()) / resolution_);
   int k = std::round((position.z() - zIndexStartHeight_) / resolution_);
   i = std::max(i, 1);
   i = std::min(i, size_.x() - 2);
@@ -181,8 +188,8 @@ void SignedDistanceField::convertToPointCloud(pcl::PointCloud<pcl::PointXYZI> & 
   for (int z = 0; z < static_cast<int>(data_.size()); z++) {
     for (int y = 0; y < static_cast<int>(size_.y()); y++) {
       for (int x = 0; x < static_cast<int>(size_.x()); x++) {
-        double xp = position_.x() + ((size_.x() - x) - xCenter) * resolution_;
-        double yp = position_.y() + ((size_.y() - y) - yCenter) * resolution_;
+        double xp = position_.x() + (xCenter - x - 0.5) * resolution_;
+        double yp = position_.y() + (yCenter - y - 0.5) * resolution_;
         double zp = zIndexStartHeight_ + z * resolution_;
         pcl::PointXYZI p;
         p.x = xp;
